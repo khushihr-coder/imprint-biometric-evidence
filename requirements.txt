@@ -1,0 +1,12 @@
+opencv-contrib-python
+numpy
+scipy
+scikit-learn
+faiss-cpu
+pillow
+requests
+python-dotenv
+fastapi
+uvicorn
+google-search-results
+web3

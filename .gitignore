@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+lfw-deepfunneled/
+lfw_allnames.csv
+lfw_readme.csv
+matchpairsDevTest.csv
+matchpairsDevTrain.csv
+mismatchpairsDevTest.csv
+mismatchpairsDevTrain.csv
+pairs.csv
+people.csv
+peopleDevTest.csv
+peopleDevTrain.csv
+
+data/index/
