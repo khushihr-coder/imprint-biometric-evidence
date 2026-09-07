@@ -3,7 +3,7 @@ import os
 
 from .detector import FaceDetector
 from .embedder import FaceEmbedder
-from .index import BiometricIndex
+from .index import BiometricIndex, should_exclude_candidate, sha256_file
 
 
 class BiometricSearch:
@@ -14,9 +14,16 @@ class BiometricSearch:
 
     def search(self, img, top_k=10):
         original_path = None
+        probe_hash = None
+        hash_cache = {}
 
         if isinstance(img, str):
             original_path = os.path.abspath(img)
+            if os.path.isfile(original_path):
+                try:
+                    probe_hash = sha256_file(original_path)
+                except Exception:
+                    probe_hash = None
             img = cv2.imread(img)
 
             if img is None:
@@ -44,6 +51,16 @@ class BiometricSearch:
         identity_scores = {}
 
         for res in results:
+            cand_source = res["meta"].get("source_image")
+            if original_path and cand_source:
+                if should_exclude_candidate(
+                    original_path,
+                    cand_source,
+                    probe_hash=probe_hash,
+                    hash_cache=hash_cache
+                ):
+                    continue
+
             identity = res["meta"]["identity"]
             score = res["similarity"]
 
@@ -75,3 +92,6 @@ class BiometricSearch:
             })
 
         return formatted_results, "Success"
+
+
+__all__ = ["BiometricSearch", "should_exclude_candidate"]
