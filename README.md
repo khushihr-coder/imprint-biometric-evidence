@@ -9,71 +9,91 @@ construction, and on-chain integrity verification — with no smart contracts.
 
 ## Architecture
 
+Both the local presentation UI and the command-line runner sit directly above the existing pipeline and invoke the identical `execute_pipeline()` core function:
+
 ```
-Input face image
-        │
-        ▼
-┌─────────────────────┐
-│  YuNet face detect  │  quality gate: exactly 1 face, min 30×30 px
-└─────────────────────┘
-        │
-        ▼
-┌─────────────────────┐
-│  SFace embedding    │  128-dim face descriptor via OpenCV DNN
-└─────────────────────┘
-        │
-        ▼
-┌─────────────────────┐
-│  FAISS 1:N search   │  FAISS inner-product search over L2-normalized SFace embeddings, equivalent to cosine similarity
-└─────────────────────┘
-        │ biometric candidates (rank, identity, score, template)
-        │
-        ├──────────────────────────────────────────────────┐
-        │                                                  │
-        ▼                                                  ▼
-┌─────────────────────┐                    ┌──────────────────────────┐
-│  Google Lens /      │                    │  Candidate media         │
-│  SerpApi live       │──► web candidates ─►  download + SHA-256      │
-│  reverse-image      │                    └──────────────────────────┘
-│  search             │                              │
-└─────────────────────┘                             │ candidate_media_sha256
-        │                                           │
-        └──────────────────┬────────────────────────┘
-                           │
-                           ▼
-              ┌────────────────────────┐
-              │  Evidence JSON         │  schema, version, input SHA-256,
-              │  (build_evidence)      │  biometric candidates, web candidates,
-              │                        │  verification state, provenance,
-              │                        │  candidate_media_sha256
-              └────────────────────────┘
-                           │
-                           ▼
-              ┌────────────────────────┐
-              │  Canonical JSON        │  sorted keys, compact separators,
-              │  (canonicalize)        │  deterministic, UTF-8
-              └────────────────────────┘
-                           │
-                           ▼
-              ┌────────────────────────┐
-              │  Evidence SHA-256      │  SHA-256(UTF-8(canonical JSON))
-              └────────────────────────┘
-                           │
-                           ▼
-              ┌────────────────────────┐
-              │  Base Sepolia tx       │  EIP-1559, value = 0 ETH
-              │  data = b"IMPRINT1"   │  40-byte payload:
-              │        + 32-byte hash │  8-byte marker + 32-byte digest
-              └────────────────────────┘
-                           │
-                           ▼
-              ┌────────────────────────┐
-              │  Transaction readback  │  fetch tx, decode payload,
-              │  + hash comparison     │  compare local vs on-chain hash
-              └────────────────────────┘
-                           │
-                           ▼
-                   EVIDENCE VERIFIED
+Local UI / CLI
+       ↓
+same execute_pipeline()
+       ↓
+Biometric → Web → Media → Evidence → SHA-256 → Base Sepolia → Readback
+```
+
+### End-to-End Pipeline Architecture
+
+```
+Local Demo UI (dashboard.py)         CLI Runner (run_pipeline.py)
+              │                                    │
+              └─────────────────┬──────────────────┘
+                                │
+                                ▼
+                     same execute_pipeline()
+                                │
+                                ▼
+                       Input face image
+                                │
+                                ▼
+                      ┌───────────────────┐
+                      │ YuNet face detect │  quality gate: exactly 1 face, min 30×30 px
+                      └───────────────────┘
+                                │
+                                ▼
+                      ┌───────────────────┐
+                      │  SFace embedding  │  128-dim face descriptor via OpenCV DNN
+                      └───────────────────┘
+                                │
+                                ▼
+                      ┌───────────────────┐
+                      │ FAISS 1:N search  │  FAISS inner-product search over L2-normalized SFace
+                      └───────────────────┘  embeddings (with content-aware self-match exclusion)
+                                │ biometric candidates (rank, identity, score, template)
+                                │
+                                ├──────────────────────────────────────────────────┐
+                                │                                                  │
+                                ▼                                                  ▼
+                      ┌───────────────────┐                    ┌──────────────────────────┐
+                      │  Google Lens /    │                    │  Candidate media         │
+                      │  SerpApi live     │──► web candidates ─►  download + SHA-256      │
+                      │  reverse-image    │                    └──────────────────────────┘
+                      │  search           │                              │
+                      └───────────────────┘                             │ candidate_media_sha256
+                                │                                           │
+                                └──────────────────┬────────────────────────┘
+                                                   │
+                                                   ▼
+                                      ┌────────────────────────┐
+                                      │  Evidence JSON         │  schema, version, input SHA-256,
+                                      │  (build_evidence)      │  biometric candidates, web candidates,
+                                      │                        │  verification state, provenance,
+                                      │                        │  candidate_media_sha256
+                                      └────────────────────────┘
+                                                   │
+                                                   ▼
+                                      ┌────────────────────────┐
+                                      │  Canonical JSON        │  sorted keys, compact separators,
+                                      │  (canonicalize)        │  deterministic, UTF-8
+                                      └────────────────────────┘
+                                                   │
+                                                   ▼
+                                      ┌────────────────────────┐
+                                      │  Evidence SHA-256      │  SHA-256(UTF-8(canonical JSON))
+                                      └────────────────────────┘
+                                                   │
+                                                   ▼
+                                      ┌────────────────────────┐
+                                      │  Base Sepolia tx       │  EIP-1559, value = 0 ETH
+                                      │  data = b"IMPRINT1"   │  40-byte payload:
+                                      │        + 32-byte hash │  8-byte marker + 32-byte digest
+                                      └────────────────────────┘
+                                                   │
+                                                   ▼
+                                      ┌────────────────────────┐
+                                      │  Transaction readback  │  fetch tx, decode payload,
+                                      │  + hash comparison     │  compare local vs on-chain hash
+                                      └────────────────────────┘
+                                                   │
+                                                   ▼
+                                           EVIDENCE VERIFIED
 ```
 
 The blockchain does not identify the person. It anchors the exact evidence record produced by the pipeline. If the evidence changes after anchoring, its SHA-256 changes and no longer matches the on-chain fingerprint.
@@ -108,20 +128,26 @@ imprint-biometric-evidence/
 │   │   ├── __init__.py
 │   │   └── evidence.py       # build_evidence, canonicalize, hash_evidence, sha256_file
 │   │
-│   └── blockchain/
-│       ├── __init__.py
-│       └── base_sepolia.py   # anchor_evidence_hash, verify_on_chain
+│   ├── blockchain/
+│   │   ├── __init__.py
+│   │   └── base_sepolia.py   # anchor_evidence_hash, verify_on_chain
+│   │
+│   └── ui/
+│       ├── __init__.py       # ImprintDashboard export
+│       └── dashboard.py      # Tkinter/ttk local desktop presentation dashboard
 │
 ├── models/
 │   ├── yunet/                # YuNet face detection ONNX model
 │   └── sface/                # SFace embedding ONNX model
 │
 ├── scripts/
-│   ├── test_search.py        # standalone biometric search test
-│   ├── test_lens.py          # standalone Google Lens / web discovery test
-│   ├── test_evidence.py      # evidence construction + hashing unit tests
-│   ├── test_blockchain.py    # blockchain connection + payload + tx tests
-│   └── run_pipeline.py       # END-TO-END pipeline runner
+│   ├── test_search.py              # standalone biometric search test
+│   ├── test_lens.py                # standalone Google Lens / web discovery test
+│   ├── test_evidence.py            # evidence construction + hashing unit tests
+│   ├── test_blockchain.py          # blockchain connection + payload + tx tests
+│   ├── test_biometric_exclusion.py # biometric self-match exclusion regression test
+│   ├── run_pipeline.py             # core pipeline & CLI runner (execute_pipeline)
+│   └── run_ui.py                   # local desktop demo UI runner
 │
 ├── data/
 │   └── index/                # generated FAISS index (git-ignored)
@@ -141,6 +167,38 @@ imprint-biometric-evidence/
 ├── requirements.txt
 └── README.md
 ```
+
+---
+
+## Local Demo UI
+
+The project includes a local Tkinter/ttk desktop presentation UI designed for interactive demonstration and judging.
+
+It is launched with:
+
+```powershell
+python scripts\run_ui.py
+```
+
+### Presentation Layer Over Existing Pipeline
+- **Presentation layer only:** The UI is a presentation layer over the existing Python pipeline and directly invokes `execute_pipeline()`.
+- **No duplicate logic:** It does not duplicate biometric, web, evidence, or blockchain logic.
+- **Local-only:** The UI is local-only and runs completely on the local workstation using Python standard-library `tkinter` and `ttk`. No hosted website, web server, Node.js, npm, or frontend build tool is required.
+- **Clean startup state:** The UI launches in a clean state (no preloaded image, all stage indicators `PENDING`, final status `READY TO VERIFY`, execution buttons disabled until an image is selected).
+
+### UI Capabilities
+- **Face image selection:** Interactive file picker with path normalization.
+- **Input preview:** Scaled, aspect-ratio-preserving preview of the selected probe face.
+- **Staged pipeline progress:** Real-time visual progress pills (`[1] INPUT` through `[6] READBACK`) updating live as each pipeline step executes.
+- **Biometric candidate display:** Shows top retrieved candidate identity, similarity score, template ID, and rank.
+- **Live web discovery result display:** Shows search provider, total results count, selected domain, and full candidate URL.
+- **Candidate media fingerprint:** Confirms download status and displays the computed `candidate_media_sha256`.
+- **Evidence SHA-256:** Displays the local cryptographic SHA-256 hash of the canonical evidence record.
+- **Base Sepolia transaction details:** Displays transaction hash, confirmed block number, and gas consumed.
+- **On-chain hash readback:** Displays the 32-byte hash recovered from on-chain transaction data.
+- **Final EVIDENCE VERIFIED status:** Prominent visual banner confirming that local and on-chain hashes match byte-for-byte.
+- **View Evidence:** Modal dialog to view the full formatted canonical evidence JSON artifact.
+- **Open Source Result:** Button to open the discovered web source URL directly in the default web browser.
 
 ---
 
@@ -226,6 +284,39 @@ data/index/meta.json     # template metadata (identity, template_id, source_imag
 
 Enrollment across the full LFW dataset (~13 000 images) takes a few minutes and
 typically enrolls ~12 000–12 500 templates after the quality gate.
+
+---
+
+## Biometric Self-Match Protection
+
+To ensure integrity during testing and live demonstrations, the biometric 1:N retrieval engine incorporates content-aware candidate exclusion.
+
+The biometric search automatically excludes:
+- Candidates at the **exact same normalized file path** as the probe.
+- Candidates whose source file has the **exact same SHA-256 content** as the probe.
+
+### Why Content-Aware Exclusion is Necessary
+A simple file-path comparison only excludes an enrolled template if the probe is loaded from the exact same disk path. If an enrolled image is copied to a different folder or test path (for example, copying `George_W_Bush_0002.jpg` outside `lfw-deepfunneled/`), path-only comparison fails to recognize it as the same physical image. Without content-aware exclusion, the pipeline would retrieve its own enrolled template and report an artificial, trivial `1.0000` similarity self-match.
+
+Excluding candidates with identical SHA-256 content ensures that exact duplicates at different paths are excluded, forcing FAISS to return true cross-image biometric matches (such as a different photograph of the same subject).
+
+### Efficient Shortlist Hashing
+Computing SHA-256 hashes across an entire database of ~13 000 images on every search query would introduce substantial delay. To prevent this:
+1. FAISS performs fast vector retrieval first over L2-normalized embeddings.
+2. SHA-256 content comparison is applied **only to the returned FAISS shortlist candidates**, rather than hashing the complete database on every search. This keeps search overhead negligible.
+
+### Regression Testing
+A dedicated standalone test validates the exclusion logic:
+
+```powershell
+python scripts\test_biometric_exclusion.py
+```
+
+The test covers:
+- **Identical path exclusion:** Candidates at the identical filesystem path are excluded.
+- **Identical-content copy at another path:** An identical image copied to an arbitrary path is excluded via SHA-256 match.
+- **Different image with similar filename remains eligible:** Distinct images from the same subject are retained as valid candidates.
+- **Missing candidate file handling:** Gracefully handles missing or deleted candidate files without raising exceptions.
 
 ---
 
@@ -348,6 +439,14 @@ python scripts\test_search.py "<path\to\probe.jpg>"
 
 Requires the FAISS index (`data/index/`) to be built first.
 
+### Biometric self-match exclusion test
+
+```powershell
+python scripts\test_biometric_exclusion.py
+```
+
+No network or external API keys required. Verifies that identical paths and identical-content copies at different paths are excluded from candidate results, distinct images remain eligible, and missing candidate files are handled gracefully.
+
 ### Web discovery (Google Lens)
 
 ```powershell
@@ -404,6 +503,44 @@ python scripts\run_pipeline.py "<path\to\probe.jpg>"
 
 All stages must succeed for the final status `EVIDENCE VERIFIED` to be printed.
 Any failure aborts cleanly with a descriptive message and a non-zero exit code.
+
+---
+
+## Final Demonstration Flow
+
+The recommended sequence for evaluating or demonstrating the complete end-to-end system:
+
+```
+Select Face Image
+       ↓
+Run Pipeline
+       ↓
+Biometric 1:N
+       ↓
+Live Google Lens
+       ↓
+Candidate Media
+       ↓
+Evidence
+       ↓
+Base Sepolia
+       ↓
+Readback
+       ↓
+EVIDENCE VERIFIED
+```
+
+### Demonstration Steps:
+1. **Launch Interface:** Run `python scripts\run_ui.py` for the desktop dashboard (or run headless via `python scripts\run_pipeline.py "<path\to\probe.jpg>"`).
+2. **Select Face Image:** Click **Select Face Image** to select an input face image (e.g., `George_W_Bush_0002.jpg`). The preview renders and the Run button activates.
+3. **Run Pipeline:** Click **Run Pipeline** to execute `execute_pipeline()`.
+4. **Biometric 1:N:** YuNet validates single-face quality, SFace extracts the 128-d descriptor, and FAISS returns the top candidate ranking with content-aware self-match exclusion active.
+5. **Live Google Lens:** SerpApi queries Google Lens live with the probe, discovering visual matches across web and social platforms without hardcoded responses.
+6. **Candidate Media Fingerprint:** The top candidate image is downloaded, verified, and hashed to produce `candidate_media_sha256`.
+7. **Canonical Evidence Construction:** The structured record (`imprint.task3.evidence` v1) is assembled, canonicalized, and hashed to produce the `evidence_sha256` digest.
+8. **Base Sepolia Anchoring:** An EIP-1559 0-ETH transaction is broadcast to Base Sepolia carrying the 40-byte payload (`b"IMPRINT1"` marker + 32-byte binary digest).
+9. **On-Chain Readback:** The mined transaction is retrieved from Base Sepolia, the input payload is decoded, and the recovered 32-byte digest is verified against the local hash.
+10. **EVIDENCE VERIFIED:** Both hashes match exactly, confirming end-to-end cryptographic integrity. Click **View Evidence** to inspect the record or **Open Source Result** to inspect the live web candidate.
 
 ---
 
