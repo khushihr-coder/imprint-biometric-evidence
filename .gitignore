@@ -15,3 +15,5 @@ peopleDevTest.csv
 peopleDevTrain.csv
 
 data/index/
+artifacts/
+venv/
